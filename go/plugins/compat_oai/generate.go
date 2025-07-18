@@ -399,12 +399,15 @@ func convertToolCalls(content []*ai.Part) []openai.ChatCompletionMessageToolCall
 }
 
 func convertToolCall(part *ai.Part) openai.ChatCompletionMessageToolCallParam {
+	toolCallID := part.ToolRequest.Ref
+	if toolCallID == "" {
+		toolCallID = part.ToolRequest.Name
+	}
+
 	param := openai.ChatCompletionMessageToolCallParam{
-		// NOTE: Temporarily set its name instead of its ref (i.e. call_xxxxx) since it's not defined in the ai.ToolRequest struct.
-		ID:   openai.F(part.ToolRequest.Name),
-		Type: openai.F(openai.ChatCompletionMessageToolCallTypeFunction),
-		Function: openai.F(openai.ChatCompletionMessageToolCallFunctionParam{
-			Name: openai.F(part.ToolRequest.Name),
+		ID: (toolCallID),
+		Function: (openai.ChatCompletionMessageToolCallFunctionParam{
+			Name: (part.ToolRequest.Name),
 		}),
 	}
 
