@@ -106,9 +106,10 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 					toolCallID = p.ToolResponse.Name
 				}
 
+				// OpenAI SDK ToolMessage expects (content, toolCallID) in this version.
 				tm := openai.ToolMessage(
-					toolCallID,
 					anyToJSONString(p.ToolResponse.Output),
+					toolCallID,
 				)
 				oaiMessages = append(oaiMessages, tm)
 			}
