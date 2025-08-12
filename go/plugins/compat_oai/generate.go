@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/openai/openai-go"
@@ -119,6 +120,14 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 			parts := []openai.ChatCompletionContentPartUnionParam{}
 			for _, p := range msg.Content {
 				if p.IsMedia() {
+					// If middleware downloaded non-image media, it will be a data: URI.
+					if strings.HasPrefix(p.Text, "data:") && !strings.HasPrefix(strings.ToLower(p.ContentType), "image/") {
+						if filePart, ok := buildFilePartFromDataURI(p.Text, p.ContentType); ok {
+							parts = append(parts, filePart)
+							continue
+						}
+					}
+					// Images: let API fetch or accept data URL directly as image content part
 					part := openai.ImageContentPart(
 						openai.ChatCompletionContentPartImageImageURLParam{
 							URL: p.Text,
@@ -437,4 +446,34 @@ func anyToJSONString(data any) string {
 		panic(fmt.Errorf("failed to marshal any to JSON string: data, %#v %w", data, err))
 	}
 	return string(jsonBytes)
+}
+
+// buildFilePartFromDataURI converts a data: URI into an OpenAI file content part.
+// Expects content like: data:<mime>;base64,<payload>
+func buildFilePartFromDataURI(dataURI string, fallbackContentType string) (openai.ChatCompletionContentPartUnionParam, bool) {
+	if !strings.HasPrefix(dataURI, "data:") {
+		return openai.ChatCompletionContentPartUnionParam{}, false
+	}
+	comma := strings.Index(dataURI, ",")
+	if comma < 0 {
+		return openai.ChatCompletionContentPartUnionParam{}, false
+	}
+	header := dataURI[:comma]
+
+	contentType := fallbackContentType
+	if semi := strings.Index(header, ";"); semi > 5 {
+		contentType = header[len("data:"):semi]
+	} else if len(header) > len("data:") {
+		contentType = header[len("data:"):]
+	}
+
+	filename := "attachment"
+	if strings.Contains(strings.ToLower(contentType), "pdf") {
+		filename = "document.pdf"
+	}
+
+	return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+		FileData: openai.String(dataURI),
+		Filename: openai.String(filename),
+	}), true
 }

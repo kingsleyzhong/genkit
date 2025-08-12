@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 
@@ -103,22 +105,50 @@ func (o *OpenAICompatible) DefineModel(g *genkit.Genkit, provider, name string, 
 	// Strip provider prefix if present to check against supportedModels
 	modelName := strings.TrimPrefix(name, provider+"/")
 
-	return genkit.DefineModel(g, provider, name, &info, func(
+	// Base handler
+	handler := func(
 		ctx context.Context,
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		// Configure the response generator with input
-		generator := NewModelGenerator(o.client, modelName).WithMessages(input.Messages).WithConfig(input.Config).WithTools(input.Tools)
+		generator := NewModelGenerator(o.client, modelName).
+			WithMessages(input.Messages).
+			WithConfig(input.Config).
+			WithTools(input.Tools)
 
-		// Generate response
-		resp, err := generator.Generate(ctx, cb)
-		if err != nil {
-			return nil, err
-		}
+		return generator.Generate(ctx, cb)
+	}
 
-		return resp, nil
-	}), nil
+	// If media is supported, pre-download non-image media so we can send as file content parts
+	if info.Supports != nil && info.Supports.Media {
+		handler = core.ChainMiddleware(ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
+			MaxBytes: 1024 * 1024 * 20, // 20MB
+			Filter: func(part *ai.Part) bool {
+				// Only download media parts
+				if !part.IsMedia() {
+					return false
+				}
+				// If content type known, skip images
+				if ct := strings.ToLower(part.ContentType); ct != "" {
+					return !strings.HasPrefix(ct, "image/")
+				}
+				// Otherwise, infer from URL extension; download if not an image
+				u, err := url.Parse(part.Text)
+				if err != nil {
+					return true
+				}
+				ext := strings.ToLower(path.Ext(u.Path))
+				switch ext {
+				case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".tif", ".heic", ".heif":
+					return false
+				default:
+					return true
+				}
+			},
+		}))(handler)
+	}
+
+	return genkit.DefineModel(g, provider, name, &info, handler), nil
 }
 
 // DefineEmbedder defines an embedder with a given name.
