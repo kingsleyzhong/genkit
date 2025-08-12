@@ -79,8 +79,6 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 		case ai.RoleSystem:
 			oaiMessages = append(oaiMessages, openai.SystemMessage(content))
 		case ai.RoleModel:
-			oaiMessages = append(oaiMessages, openai.AssistantMessage(content))
-
 			am := openai.ChatCompletionAssistantMessageParam{}
 			if msg.Content[0].Text != "" {
 				am.Content.OfArrayOfContentParts = append(am.Content.OfArrayOfContentParts, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
@@ -93,9 +91,14 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 			if len(toolCalls) > 0 {
 				am.ToolCalls = (toolCalls)
 			}
-			oaiMessages = append(oaiMessages, openai.ChatCompletionMessageParamUnion{
-				OfAssistant: &am,
-			})
+			if len(am.Content.OfArrayOfContentParts) > 0 || len(toolCalls) > 0 {
+				oaiMessages = append(oaiMessages, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &am,
+				})
+			} else if strings.TrimSpace(content) != "" {
+				// Fallback to a simple assistant text message if there is no structured content
+				oaiMessages = append(oaiMessages, openai.AssistantMessage(content))
+			}
 		case ai.RoleTool:
 			for _, p := range msg.Content {
 				if !p.IsToolResponse() {
@@ -115,8 +118,6 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 				oaiMessages = append(oaiMessages, tm)
 			}
 		case ai.RoleUser:
-			oaiMessages = append(oaiMessages, openai.UserMessage(content))
-
 			parts := []openai.ChatCompletionContentPartUnionParam{}
 			for _, p := range msg.Content {
 				if p.IsMedia() {
@@ -135,13 +136,24 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 					parts = append(parts, part)
 					continue
 				}
+				// Non-media textual content: include as a text content part
+				if p.Text != "" {
+					parts = append(parts, openai.ChatCompletionContentPartUnionParam{
+						OfText: &openai.ChatCompletionContentPartTextParam{Text: p.Text},
+					})
+				}
 			}
 			if len(parts) > 0 {
+				// Build a single user message with structured content parts to avoid duplicating
+				// the message and accidentally sending base64 as plain text tokens.
 				oaiMessages = append(oaiMessages, openai.ChatCompletionMessageParamUnion{
 					OfUser: &openai.ChatCompletionUserMessageParam{
 						Content: openai.ChatCompletionUserMessageParamContentUnion{OfArrayOfContentParts: parts},
 					},
 				})
+			} else if strings.TrimSpace(content) != "" {
+				// Fallback to simple text message if there are no parts
+				oaiMessages = append(oaiMessages, openai.UserMessage(content))
 			}
 		default:
 			// ignore parts from not supported roles
